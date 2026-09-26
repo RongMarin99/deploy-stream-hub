@@ -1,0 +1,99 @@
+# Server deployment: no source/build needed. Pulls prebuilt images from Docker Hub.
+# Usage: see deploy.sh (docker compose -f docker-compose.prod.yml pull && ... up -d)
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: streamhub
+      POSTGRES_USER: streamhub
+      POSTGRES_PASSWORD: streamhub
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streamhub -d streamhub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    image: rongmarin/streamhub-backend:latest
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - backend_storage:/app/storage
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  celery_worker:
+    image: rongmarin/streamhub-backend:latest
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - backend_storage:/app/storage
+    entrypoint: []
+    command: ["python", "-m", "celery", "-A", "app.workers.celery_app", "worker", "--loglevel=INFO"]
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  celery_beat:
+    image: rongmarin/streamhub-backend:latest
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - backend_storage:/app/storage
+    entrypoint: []
+    command: ["python", "-m", "celery", "-A", "app.workers.celery_app", "beat", "--loglevel=INFO"]
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  frontend:
+    image: rongmarin/streamhub-frontend:latest
+    env_file:
+      - .env
+    depends_on:
+      - backend
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  backend_storage:
