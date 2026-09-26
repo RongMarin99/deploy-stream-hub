@@ -1,7 +1,10 @@
 #!/bin/bash
 # Run this on the server. Needs only this file + docker-compose.prod.yml — no
-# source code, no manual .env editing. First run asks a few questions (admin
-# username/password/email, your domain or IP) and generates secrets for you.
+# source code, no manual .env editing, no need to have Docker installed already
+# (this script installs it for you if missing). First run asks a few questions
+# (admin username/password/email, your domain or IP) and generates secrets for you.
+#
+# Run as root, or as a user that can sudo without issue.
 #
 # Usage:
 #   ./setup.sh                first run: interactive setup, then starts everything
@@ -13,13 +16,39 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+if [ "$(id -u)" -eq 0 ]; then
+  SUDO=""
+else
+  SUDO="sudo"
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is not installed. Install Docker Engine + the Compose plugin first: https://docs.docker.com/engine/install/" >&2
+  echo "Docker not found — installing it automatically (takes a minute)..."
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL https://get.docker.com | $SUDO sh
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- https://get.docker.com | $SUDO sh
+  else
+    echo "Need curl or wget to auto-install Docker, and neither is on this machine." >&2
+    echo "Ask whoever manages this server to install curl, or install Docker manually: https://docs.docker.com/engine/install/" >&2
+    exit 1
+  fi
+  $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker install didn't finish cleanly. Ask whoever manages this server to install it manually: https://docs.docker.com/engine/install/" >&2
+    exit 1
+  fi
+  echo "Docker installed."
+fi
+
+if ! $SUDO docker compose version >/dev/null 2>&1; then
+  echo "Docker's Compose plugin is missing even after install. Ask whoever manages this server to check the Docker install: https://docs.docker.com/engine/install/" >&2
   exit 1
 fi
 
 if ! command -v openssl >/dev/null 2>&1; then
   echo "openssl is required (used to generate secrets) but was not found." >&2
+  echo "On Debian/Ubuntu: $SUDO apt-get install -y openssl" >&2
   exit 1
 fi
 
@@ -27,8 +56,8 @@ ENV_FILE=".env"
 
 if [ -f "$ENV_FILE" ] && [ "$1" != "--reconfigure" ]; then
   echo "Found existing setup. Pulling latest images and restarting..."
-  docker compose -f docker-compose.prod.yml pull
-  docker compose -f docker-compose.prod.yml up -d
+  $SUDO docker compose -f docker-compose.prod.yml pull
+  $SUDO docker compose -f docker-compose.prod.yml up -d
   echo
   echo "StreamHub is up."
   echo "(run './setup.sh --reconfigure' to redo the setup questions)"
@@ -105,8 +134,8 @@ chmod 600 "$ENV_FILE"
 
 echo
 echo "Config saved. Pulling images and starting StreamHub..."
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+$SUDO docker compose -f docker-compose.prod.yml pull
+$SUDO docker compose -f docker-compose.prod.yml up -d
 
 echo
 echo "=================================================="
