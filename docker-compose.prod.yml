@@ -1,5 +1,12 @@
 # Server deployment: no source/build needed. Pulls prebuilt images from Docker Hub.
-# Usage: see deploy.sh (docker compose -f docker-compose.prod.yml pull && ... up -d)
+# Usage: ./setup.sh   (or: docker compose pull && docker compose up -d)
+#
+# DATA SAFETY: all state lives in the named volumes at the bottom. They have fixed
+# names (not derived from the folder name), so re-cloning, renaming the folder or
+# `docker compose up/pull/restart` never touches them. Only `docker compose down -v`
+# or `docker volume rm` deletes data — never run those on a server you care about.
+name: streamhub
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -95,5 +102,8 @@ services:
 
 volumes:
   pgdata:
+    name: streamhub_pgdata          # PostgreSQL: users, streams, stream keys, logs
   redisdata:
+    name: streamhub_redisdata       # Redis: queue/session state
   backend_storage:
+    name: streamhub_backend_storage # uploaded videos, thumbnails
