@@ -64,6 +64,12 @@ if [ ! -f "$COMPOSE_FILE" ] || grep -q "Not Found" "$COMPOSE_FILE"; then
   exit 1
 fi
 
+if [ -f "$ENV_FILE" ] && [ "$1" != "--reconfigure" ] && ! grep -q '^FRONTEND_DOMAIN=' "$ENV_FILE"; then
+  echo "Your .env predates the HTTPS/domain setup. Run './setup.sh --reconfigure' once —" >&2
+  echo "it keeps your existing secrets and data, and asks for the two domains." >&2
+  exit 1
+fi
+
 if [ -f "$ENV_FILE" ] && [ "$1" != "--reconfigure" ]; then
   echo "Found existing setup. Pulling latest images and restarting..."
   docker compose -f "$COMPOSE_FILE" pull
@@ -90,8 +96,15 @@ while true; do
   echo "Password can't be empty."
 done
 
-read -rp "Server domain or IP people will use to reach this site (e.g. streamhub.example.com or 203.0.113.5) [localhost]: " SERVER_HOST
-SERVER_HOST=${SERVER_HOST:-localhost}
+read -rp "Frontend domain [stream.rongmarin.com]: " FRONTEND_DOMAIN
+FRONTEND_DOMAIN=${FRONTEND_DOMAIN:-stream.rongmarin.com}
+
+read -rp "API domain [api-stream.rongmarin.com]: " API_DOMAIN
+API_DOMAIN=${API_DOMAIN:-api-stream.rongmarin.com}
+
+echo
+echo "Both domains must already point (DNS A record) at this server, and ports 80/443 must be open,"
+echo "so HTTPS certificates can be issued automatically."
 
 echo
 echo "YouTube sync (optional — press Enter to skip; add later by editing .env):"
@@ -99,8 +112,12 @@ read -rp "Google OAuth client ID: " GOOGLE_CLIENT_ID
 read -rsp "Google OAuth client secret: " GOOGLE_CLIENT_SECRET
 echo
 
-JWT_SECRET_KEY=$(openssl rand -hex 48)
-AES_ENCRYPTION_KEY=$(openssl rand -base64 32)
+# On --reconfigure keep the existing secrets: changing AES_ENCRYPTION_KEY would make the
+# stored (encrypted) stream keys unreadable, and changing JWT_SECRET_KEY logs everyone out.
+JWT_SECRET_KEY=$(grep -s '^JWT_SECRET_KEY=' "$ENV_FILE" | cut -d= -f2-)
+AES_ENCRYPTION_KEY=$(grep -s '^AES_ENCRYPTION_KEY=' "$ENV_FILE" | cut -d= -f2-)
+[ -n "$JWT_SECRET_KEY" ] || JWT_SECRET_KEY=$(openssl rand -hex 48)
+[ -n "$AES_ENCRYPTION_KEY" ] || AES_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
 cat > "$ENV_FILE" <<EOF
 PROJECT_NAME=StreamHub
@@ -109,7 +126,7 @@ DEBUG=false
 LOG_LEVEL=INFO
 
 API_V1_PREFIX=/api/v1
-CORS_ORIGINS=["*"]
+CORS_ORIGINS=["https://${FRONTEND_DOMAIN}"]
 
 DATABASE_URL=postgresql+asyncpg://streamhub:streamhub@postgres:5432/streamhub
 REDIS_URL=redis://redis:6379/0
@@ -137,10 +154,12 @@ ADMIN_EMAIL=${ADMIN_EMAIL}
 
 GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
 GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-GOOGLE_REDIRECT_URI=http://${SERVER_HOST}:3001/settings/youtube
+GOOGLE_REDIRECT_URI=https://${FRONTEND_DOMAIN}/settings/youtube
 
-NUXT_PUBLIC_API_BASE=http://${SERVER_HOST}:8000/api/v1
-NUXT_PUBLIC_WS_BASE=ws://${SERVER_HOST}:8000/ws
+FRONTEND_DOMAIN=${FRONTEND_DOMAIN}
+API_DOMAIN=${API_DOMAIN}
+NUXT_PUBLIC_API_BASE=https://${API_DOMAIN}/api/v1
+NUXT_PUBLIC_WS_BASE=wss://${API_DOMAIN}/ws
 EOF
 
 chmod 600 "$ENV_FILE"
@@ -153,8 +172,10 @@ docker compose -f "$COMPOSE_FILE" up -d
 echo
 echo "=================================================="
 echo " StreamHub is up."
-echo " Frontend: http://${SERVER_HOST}:3001"
-echo " Backend health: http://${SERVER_HOST}:8000/api/v1/health"
+echo " Frontend: https://${FRONTEND_DOMAIN}"
+echo " API health: https://${API_DOMAIN}/api/v1/health"
+echo " (first load may take ~1 min while HTTPS certificates are issued)"
+echo " Google OAuth redirect URI to allow: https://${FRONTEND_DOMAIN}/settings/youtube"
 echo " Admin login: ${ADMIN_USERNAME} / (the password you just entered)"
 echo "=================================================="
 echo " Note: the admin password only seeds on first boot (empty database)."
